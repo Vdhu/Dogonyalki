@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/_global-error/page": "app/_global-error/page.js",
+  "/api/sessions/[id]/interval/route": "app/api/sessions/[id]/interval/route.js",
+  "/api/sessions/[id]/location/route": "app/api/sessions/[id]/location/route.js",
+  "/api/sessions/[id]/role/route": "app/api/sessions/[id]/role/route.js",
+  "/api/sessions/[id]/route": "app/api/sessions/[id]/route.js",
+  "/api/sessions/join/route": "app/api/sessions/join/route.js",
+  "/api/sessions/route": "app/api/sessions/route.js",
+  "/api/health/route": "app/api/health/route.js",
+  "/page": "app/page.js"
+}
