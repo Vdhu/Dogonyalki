@@ -37,6 +37,8 @@ export interface Session {
   createdAt: string;
 }
 
+const memoryCache = new Map<string, Session>();
+
 function getRoomKey(code: string): string {
   return `room:${code.trim().toUpperCase()}`;
 }
@@ -44,24 +46,25 @@ function getRoomKey(code: string): string {
 export async function getSession(code: string): Promise<Session | null> {
   const normalizedCode = code.trim().toUpperCase();
   try {
-    const raw = await redis.get(getRoomKey(normalizedCode));
-    if (!raw) return null;
-    if (typeof raw === "string") {
-      return JSON.parse(raw) as Session;
+    const raw = await redis.get<any>(getRoomKey(normalizedCode));
+    if (raw) {
+      const session = typeof raw === "string" ? JSON.parse(raw) : raw;
+      memoryCache.set(normalizedCode, session as Session);
+      return session as Session;
     }
-    return raw as Session;
   } catch (e) {
-    console.error("Error fetching session from Redis:", e);
-    return null;
+    console.error("Redis fetch error:", e);
   }
+  return memoryCache.get(normalizedCode) || null;
 }
 
 export async function saveSession(session: Session): Promise<void> {
   const normalizedCode = session.code.trim().toUpperCase();
+  memoryCache.set(normalizedCode, session);
   try {
     await redis.set(getRoomKey(normalizedCode), JSON.stringify(session), { ex: 86400 });
   } catch (e) {
-    console.error("Error saving session to Redis:", e);
+    console.error("Redis save error:", e);
   }
 }
 
@@ -88,8 +91,16 @@ export async function createSession(revealIntervalSeconds: number): Promise<Sess
 }
 
 export async function joinSession(code: string, nickname: string): Promise<{ session: Session; playerId: string } | null> {
-  const session = await getSession(code);
+  const normalizedCode = code.trim().toUpperCase();
+  const session = await getSession(normalizedCode);
   if (!session) return null;
+
+  const existingPlayer = session.players.find(
+    (p) => p.nickname.trim().toLowerCase() === nickname.trim().toLowerCase()
+  );
+  if (existingPlayer) {
+    return { session, playerId: existingPlayer.id };
+  }
 
   const playerId = `p_${Math.random().toString(36).substring(2, 9)}`;
   const colors = ["#EF4444", "#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899"];
@@ -97,7 +108,7 @@ export async function joinSession(code: string, nickname: string): Promise<{ ses
 
   const newPlayer: Player = {
     id: playerId,
-    nickname,
+    nickname: nickname.trim(),
     role: "runner",
     color: assignedColor,
     actualLat: 0,

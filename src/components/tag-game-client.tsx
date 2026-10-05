@@ -46,8 +46,9 @@ export function TagGameClient() {
   const [chatChannel, setChatChannel] = useState<"all" | "runners">("all");
   const [messageText, setMessageText] = useState("");
   const [gpsStatus, setGpsStatus] = useState("Инициализация...");
+  const [failedAttempts, setFailedAttempts] = useState(0);
 
-  const storageKey = "tag_game_auth_v5";
+  const storageKey = "tag_game_auth_v6";
 
   useEffect(() => {
     const raw = localStorage.getItem(storageKey);
@@ -64,7 +65,7 @@ export function TagGameClient() {
   }, []);
 
   const saveAuth = (code: string, id: string) => {
-    const data = { roomCode: code, playerId: id };
+    const data = { roomCode: code.trim().toUpperCase(), playerId: id };
     setAuth(data);
     localStorage.setItem(storageKey, JSON.stringify(data));
   };
@@ -82,8 +83,15 @@ export function TagGameClient() {
       if (res.ok) {
         const data = await res.json();
         setSession(data);
+        setFailedAttempts(0);
       } else if (res.status === 404) {
-        setGpsStatus("Комната не найдена");
+        setFailedAttempts((prev) => {
+          const next = prev + 1;
+          if (next >= 5) {
+            setGpsStatus("Комната не найдена");
+          }
+          return next;
+        });
       }
     } catch (e) {
       console.error("Ошибка обновления сессии:", e);
@@ -159,11 +167,12 @@ export function TagGameClient() {
 
   const handleJoinRoom = async () => {
     if (!roomCode) return;
+    const cleanCode = roomCode.trim().toUpperCase();
     try {
-      const res = await fetch(`/api/sessions/${roomCode.trim().toUpperCase()}/join`, {
+      const res = await fetch(`/api/sessions/${cleanCode}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nickname: nickname || "Игрок" }),
+        body: JSSN.stringify({ nickname: nickname || "Игрок" }),
       });
 
       if (res.ok) {
