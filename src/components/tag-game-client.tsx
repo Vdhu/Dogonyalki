@@ -62,30 +62,27 @@ export function TagGameClient() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Состояние чата
   const [chatTab, setChatTab] = useState<"all" | "runners">("all");
   const [chatText, setChatText] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
 
-  const storageKey = "tag-game-auth-v2";
+  const storageKey = "tag-game-auth-v3";
 
   useEffect(() => {
-    const raw = localStorage.getItem(storageKey);
+    const raw = localStorage.getItem(storageKey) || localStorage.getItem("tag-game-auth-v2");
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw) as AuthState;
-      if (parsed?.sessionCode && parsed?.playerId) {
+      if (parsed?.sessionCode && parsed?.playerId && parsed.playerId !== parsed.sessionCode) {
         setAuth(parsed);
+      } else {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem("tag-game-auth-v2");
       }
     } catch {
       localStorage.removeItem(storageKey);
     }
   }, []);
-
-  useEffect(() => {
-    if (!auth) return;
-    localStorage.setItem(storageKey, JSON.stringify(auth));
-  }, [auth]);
 
   async function createRoom(e: FormEvent) {
     e.preventDefault();
@@ -182,39 +179,40 @@ export function TagGameClient() {
   }
 
   async function refreshSession() {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return;
-    let currentAuth: AuthState;
-    try {
-      currentAuth = JSON.parse(raw);
-    } catch {
+    if (!auth) return;
+    if (auth.playerId === auth.sessionCode) {
+      setAuth(null);
+      setSession(null);
+      localStorage.removeItem(storageKey);
       return;
     }
 
-    if (!currentAuth?.sessionCode || !currentAuth?.playerId) return;
-
     try {
       const res = await fetch(
-        `/api/sessions/${currentAuth.sessionCode}?viewerId=${currentAuth.playerId}`,
+        `/api/sessions/${auth.sessionCode}?viewerId=${auth.playerId}`,
         { cache: "no-store" }
       );
 
-      if (res.status === 404) return;
+      if (res.status === 404 || res.status === 403) {
+        setAuth(null);
+        setSession(null);
+        localStorage.removeItem(storageKey);
+        setError("Сессия истекла или была удалена. Создайте комнату заново.");
+        return;
+      }
 
       const data = (await res.json()) as SessionView & { error?: string };
       if (!res.ok) return;
 
-      setAuth(currentAuth);
       setSession(data);
       setError(null);
     } catch {
-      // Игнорируем сетевые обрывы
+      // Игнорируем временные сетевые сбои
     }
   }
 
   useEffect(() => {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return;
+    if (!auth) return;
 
     void refreshSession();
     const timer = window.setInterval(() => {
@@ -232,7 +230,31 @@ export function TagGameClient() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, []);
+  }, [auth]);
+
+  useEffect(() => {
+    if (!auth || !navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        void fetch(`/api/sessions/${auth.sessionCode}/location`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playerId: auth.playerId,
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          }),
+        });
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [auth]);
 
   async function sendMessage(e: FormEvent) {
     e.preventDefault();
@@ -374,7 +396,9 @@ export function TagGameClient() {
                   <p className="text-sm text-slate-600">
                     До следующего reveal: <strong>{session.countdownSec} сек</strong>
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-sm text-amber-600">Загрузка данных сессии...</p>
+                )}
               </div>
 
               <div className="flex gap-2">
@@ -397,50 +421,51 @@ export function TagGameClient() {
               </div>
             </div>
 
-            <div className="mt-6 overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b text-slate-500">
-                    <th className="py-2 pr-4">Игрок</th>
-                    <th className="py-2 pr-4">Роль</th>
-                    <th className="py-2 pr-4">Видимая Lat</th>
-                    <th className="py-2 pr-4">Видимая Lng</th>
-                    <th className="py-2 pr-4">Статус</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedPlayers.map((player) => (
-                    <tr key={player.id} className="border-b last:border-0">
-                      <td className="py-2 pr-4">
-                        <span className="inline-flex items-center gap-2">
-                          <span
-                            className="h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: player.color }}
-                          />
-                          {player.nickname}
-                          {session?.viewer.id === player.id ? <strong>(Вы)</strong> : null}
-                        </span>
-                      </td>
-                      <td className="py-2 pr-4">
-                        {player.role === "seeker" || player.role === "Вода" ? "Вода" : "Убегающий"}
-                      </td>
-                      <td className="py-2 pr-4 tabular-nums">
-                        {formatCoord(player.lat)}
-                      </td>
-                      <td className="py-2 pr-4 tabular-nums">
-                        {formatCoord(player.lng)}
-                      </td>
-                      <td className="py-2 pr-4">
-                        {player.delayed ? "Отложенные данные" : "Актуальные данные"}
-                      </td>
+            {session ? (
+              <div className="mt-6 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b text-slate-500">
+                      <th className="py-2 pr-4">Игрок</th>
+                      <th className="py-2 pr-4">Роль</th>
+                      <th className="py-2 pr-4">Видимая Lat</th>
+                      <th className="py-2 pr-4">Видимая Lng</th>
+                      <th className="py-2 pr-4">Статус</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {sortedPlayers.map((player) => (
+                      <tr key={player.id} className="border-b last:border-0">
+                        <td className="py-2 pr-4">
+                          <span className="inline-flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: player.color }}
+                            />
+                            {player.nickname}
+                            {session.viewer.id === player.id ? <strong>(Вы)</strong> : null}
+                          </span>
+                        </td>
+                        <td className="py-2 pr-4">
+                          {player.role === "seeker" || player.role === "Вода" ? "Вода" : "Убегающий"}
+                        </td>
+                        <td className="py-2 pr-4 tabular-nums">
+                          {formatCoord(player.lat)}
+                        </td>
+                        <td className="py-2 pr-4 tabular-nums">
+                          {formatCoord(player.lng)}
+                        </td>
+                        <td className="py-2 pr-4">
+                          {player.delayed ? "Отложенные данные" : "Актуальные данные"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </div>
 
-          {/* ЧАТ КЛАНА / ВСЕХ */}
           <div className="rounded-2xl bg-white p-6 shadow-sm">
             <h2 className="text-lg font-semibold mb-3">Чат</h2>
 
@@ -468,7 +493,7 @@ export function TagGameClient() {
 
             <div className="h-48 overflow-y-auto border rounded-xl p-3 flex flex-col gap-2 mb-3 bg-slate-50">
               {filteredMessages.length === 0 ? (
-                <p className="text-xs text-slate-400">Сообщений нет</p>
+                <p className="text-xs text-slate-400">Сообщений пока нет</p>
               ) : (
                 filteredMessages.map((msg) => (
                   <div key={msg.id} className="text-sm">
@@ -492,7 +517,7 @@ export function TagGameClient() {
                 maxLength={300}
               />
               <button
-                disabled={sendingMsg || !chatText.trim()}
+                disabled={sendingMsg || !chatText.trim() || !session}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
               >
                 Отправить

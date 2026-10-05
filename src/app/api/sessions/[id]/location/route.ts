@@ -1,36 +1,25 @@
-import { fail, ok, safeJson } from "@/lib/api";
-import { upsertLocation } from "@/lib/tag-store";
+import { fail, ok } from "@/lib/api";
+import { updatePlayerLocation } from "@/lib/tag-store";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  try {
+    const { id } = await params;
+    const body = await req.json();
+    const { playerId, lat, lng } = body;
 
-  const parsed = await safeJson(req);
-  if (!parsed.ok) {
-    return fail("Некорректное тело запроса", 400);
+    if (!id || !playerId || typeof lat !== "number" || typeof lng !== "number") {
+      return fail("Неверные параметры", 400);
+    }
+
+    const result = await updatePlayerLocation(id, playerId, lat, lng);
+    if (!result.ok) {
+      return fail(result.error ?? "Ошибка обновления локации", 400);
+    }
+
+    return ok({ success: true });
+  } catch (err) {
+    return fail("Внутренняя ошибка сервера", 500);
   }
-
-  const body = parsed.data as {
-    playerId?: unknown;
-    lat?: unknown;
-    lng?: unknown;
-  };
-
-  const playerId = typeof body.playerId === "string" ? body.playerId : "";
-  const lat = typeof body.lat === "number" ? body.lat : Number(body.lat ?? Number.NaN);
-  const lng = typeof body.lng === "number" ? body.lng : Number(body.lng ?? Number.NaN);
-
-  const result = await upsertLocation({
-    sessionCode: id,
-    playerId,
-    lat,
-    lng,
-  });
-
-  if (!result.ok) {
-    return fail(result.reason.error, result.reason.status);
-  }
-
-  return ok({ ok: true });
 }

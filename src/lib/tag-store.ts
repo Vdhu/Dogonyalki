@@ -77,11 +77,25 @@ export async function getSessionState(code: string, viewerId: string) {
     }
 
     const nextRevealTime = new Date(session.nextRevealAt).getTime();
-    const countdownSec = Math.max(0, Math.floor((nextRevealTime - Date.now()) / 1000));
+    let countdownSec = Math.max(0, Math.floor((nextRevealTime - Date.now()) / 1000));
+
+    if (Date.now() >= nextRevealTime) {
+      const nextTime = new Date(Date.now() + session.revealIntervalSeconds * 1000).toISOString();
+      session.nextRevealAt = nextTime;
+      countdownSec = session.revealIntervalSeconds;
+
+      session.players = session.players.map((p) => ({
+        ...p,
+        revealedLat: p.actualLat,
+        revealedLng: p.actualLng,
+        lastRevealedAt: new Date().toISOString(),
+      }));
+
+      await saveSession(session);
+    }
 
     const isSeeker = viewer.role === "seeker" || viewer.role === "Вода";
 
-    // Фильтрация чата: если игрок Вода, отсекаем сообщения для убегающих
     const messages = (session.messages || []).filter((msg) => {
       if (msg.channel === "runners" && isSeeker) {
         return false;
@@ -157,11 +171,36 @@ export async function addChatMessage(
   }
 
   session.messages.push(newMessage);
-  // Храним последние 100 сообщений
   if (session.messages.length > 100) {
     session.messages = session.messages.slice(-100);
   }
 
   await saveSession(session);
   return { ok: true, message: newMessage };
+}
+
+export async function updatePlayerLocation(
+  code: string,
+  playerId: string,
+  lat: number,
+  lng: number
+) {
+  const session = await getSession(code);
+  if (!session) return { ok: false, error: "Комната не найдена" };
+
+  const player = session.players.find((p) => p.id === playerId);
+  if (!player) return { ok: false, error: "Игрок не найден" };
+
+  player.actualLat = lat;
+  player.actualLng = lng;
+  player.lastActualAt = new Date().toISOString();
+
+  if (player.role === "seeker" || player.role === "Вода" || (player.revealedLat === 0 && player.revealedLng === 0)) {
+    player.revealedLat = lat;
+    player.revealedLng = lng;
+    player.lastRevealedAt = player.lastActualAt;
+  }
+
+  await saveSession(session);
+  return { ok: true };
 }
