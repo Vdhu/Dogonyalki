@@ -18,12 +18,22 @@ export interface Player {
   lastRevealedAt: string;
 }
 
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderNickname: string;
+  text: string;
+  channel: "all" | "runners";
+  createdAt: string;
+}
+
 export interface Session {
   code: string;
   creatorId: string;
   revealIntervalSeconds: number;
   nextRevealAt: string;
   players: Player[];
+  messages?: ChatMessage[];
   createdAt: string;
 }
 
@@ -54,75 +64,6 @@ export async function saveSession(session: Session): Promise<void> {
   }
 }
 
-export async function createSession(data: {
-  creatorNickname: string;
-  role: string;
-  revealIntervalSeconds?: number;
-}) {
-  try {
-    const code = "TAG-" + Math.floor(1000 + Math.random() * 9000);
-    const playerId = "p_" + Math.random().toString(36).substring(2, 9);
-    const now = new Date().toISOString();
-
-    const creator: Player = {
-      id: playerId,
-      nickname: data.creatorNickname,
-      role: data.role,
-      color: "#" + Math.floor(Math.random() * 16777215).toString(16),
-      actualLat: 0,
-      actualLng: 0,
-      revealedLat: 0,
-      revealedLng: 0,
-      lastActualAt: now,
-      lastRevealedAt: now,
-    };
-
-    const interval = data.revealIntervalSeconds || 60;
-    const session: Session = {
-      code,
-      creatorId: playerId,
-      revealIntervalSeconds: interval,
-      nextRevealAt: new Date(Date.now() + interval * 1000).toISOString(),
-      players: [creator],
-      createdAt: now,
-    };
-
-    await saveSession(session);
-    return { ok: true, code, playerId };
-  } catch (e) {
-    return { ok: false, error: "Ошибка создания комнаты" };
-  }
-}
-
-export async function joinSession(code: string, nickname: string, role: string) {
-  try {
-    const session = await getSession(code);
-    if (!session) return { ok: false, error: "Комната не найдена" };
-
-    const playerId = "p_" + Math.random().toString(36).substring(2, 9);
-    const now = new Date().toISOString();
-
-    const newPlayer: Player = {
-      id: playerId,
-      nickname,
-      role,
-      color: "#" + Math.floor(Math.random() * 16777215).toString(16),
-      actualLat: 0,
-      actualLng: 0,
-      revealedLat: 0,
-      revealedLng: 0,
-      lastActualAt: now,
-      lastRevealedAt: now,
-    };
-
-    session.players.push(newPlayer);
-    await saveSession(session);
-    return { ok: true, code: session.code, playerId };
-  } catch (e) {
-    return { ok: false, error: "Ошибка подключения" };
-  }
-}
-
 export async function getSessionState(code: string, viewerId: string) {
   try {
     const session = await getSession(code);
@@ -137,6 +78,16 @@ export async function getSessionState(code: string, viewerId: string) {
 
     const nextRevealTime = new Date(session.nextRevealAt).getTime();
     const countdownSec = Math.max(0, Math.floor((nextRevealTime - Date.now()) / 1000));
+
+    const isSeeker = viewer.role === "seeker" || viewer.role === "Вода";
+
+    // Фильтрация чата: если игрок Вода, отсекаем сообщения для убегающих
+    const messages = (session.messages || []).filter((msg) => {
+      if (msg.channel === "runners" && isSeeker) {
+        return false;
+      }
+      return true;
+    });
 
     const publicPlayers = session.players.map((player) => {
       const isSelfOrSeeker = player.id === viewer.id || player.role === "Вода" || player.role === "seeker";
@@ -167,9 +118,50 @@ export async function getSessionState(code: string, viewerId: string) {
           isCreator: viewer.id === session.creatorId,
         },
         players: publicPlayers,
+        messages,
       },
     };
   } catch (err) {
     return { ok: false, reason: { status: 500, error: "Ошибка загрузки состояния" } };
   }
+}
+
+export async function addChatMessage(
+  code: string,
+  senderId: string,
+  text: string,
+  channel: "all" | "runners"
+) {
+  const session = await getSession(code);
+  if (!session) return { ok: false, error: "Комната не найдена" };
+
+  const sender = session.players.find((p) => p.id === senderId);
+  if (!sender) return { ok: false, error: "Игрок не найден" };
+
+  const isSeeker = sender.role === "seeker" || sender.role === "Вода";
+  if (channel === "runners" && isSeeker) {
+    return { ok: false, error: "Вода не может писать в чат убегающих" };
+  }
+
+  const newMessage: ChatMessage = {
+    id: "m_" + Math.random().toString(36).substring(2, 9),
+    senderId: sender.id,
+    senderNickname: sender.nickname,
+    text: text.trim().substring(0, 300),
+    channel,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (!session.messages) {
+    session.messages = [];
+  }
+
+  session.messages.push(newMessage);
+  // Храним последние 100 сообщений
+  if (session.messages.length > 100) {
+    session.messages = session.messages.slice(-100);
+  }
+
+  await saveSession(session);
+  return { ok: true, message: newMessage };
 }
