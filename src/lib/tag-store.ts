@@ -37,8 +37,6 @@ export interface Session {
   createdAt: string;
 }
 
-const memoryStore = new Map<string, Session>();
-
 function getRoomKey(code: string): string {
   return `room:${code.trim().toUpperCase()}`;
 }
@@ -46,23 +44,22 @@ function getRoomKey(code: string): string {
 export async function getSession(code: string): Promise<Session | null> {
   const normalizedCode = code.trim().toUpperCase();
   try {
-    const raw = await redis.get<any>(getRoomKey(normalizedCode));
-    if (raw) {
-      const session = typeof raw === "string" ? JSON.parse(raw) : raw;
-      memoryStore.set(normalizedCode, session as Session);
-      return session as Session;
+    const raw = await redis.get(getRoomKey(normalizedCode));
+    if (!raw) return null;
+    if (typeof raw === "string") {
+      return JSON.parse(raw) as Session;
     }
+    return raw as Session;
   } catch (e) {
     console.error("Error fetching session from Redis:", e);
+    return null;
   }
-  return memoryStore.get(normalizedCode) || null;
 }
 
 export async function saveSession(session: Session): Promise<void> {
   const normalizedCode = session.code.trim().toUpperCase();
-  memoryStore.set(normalizedCode, session);
   try {
-    await redis.set(getRoomKey(normalizedCode), session, { ex: 86400 });
+    await redis.set(getRoomKey(normalizedCode), JSON.stringify(session), { ex: 86400 });
   } catch (e) {
     console.error("Error saving session to Redis:", e);
   }

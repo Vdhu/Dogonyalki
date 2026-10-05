@@ -1,24 +1,18 @@
-import { fail, ok } from "@/lib/api";
+import { NextResponse } from "next/server";
 import { joinSession } from "@/lib/tag-store";
 
-export const dynamic = "force-dynamic";
-
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
-    const { id } = await params;
     const body = await req.json();
-    const { nickname, role } = body;
+    const nickname = body.nickname || "Игрок";
+    const result = await joinSession(params.id, nickname);
 
-    if (!id) return fail("Код комнаты не указан", 400);
-
-    const res = await joinSession(id, nickname || "Игрок", role || "runner");
-    if (!res.ok) {
-      return fail(res.error ?? "Не удалось войти", 400);
+    if (!result) {
+      return NextResponse.json({ error: "Room not found" }, { status: 404 });
     }
 
-    return ok(res);
-  } catch (err) {
-    console.error("Join room error:", err);
-    return fail("Ошибка при входе в комнату", 500);
+    return NextResponse.json(result);
+  } catch (e) {
+    return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }
