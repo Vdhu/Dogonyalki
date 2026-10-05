@@ -14,23 +14,17 @@ export interface Player {
   actualLng: number;
   revealedLat: number;
   revealedLng: number;
-  lastActualAt: string | Date;
-  lastRevealedAt: string | Date;
+  lastActualAt: string;
+  lastRevealedAt: string;
 }
 
 export interface Session {
   code: string;
   creatorId: string;
   revealIntervalSeconds: number;
-  nextRevealAt: string | Date;
+  nextRevealAt: string;
   players: Player[];
-  createdAt: string | Date;
-}
-
-function toIso(date: string | Date | null | undefined): string {
-  if (!date) return new Date().toISOString();
-  if (typeof date === "string") return date;
-  return date.toISOString();
+  createdAt: string;
 }
 
 function getRoomKey(code: string): string {
@@ -39,8 +33,12 @@ function getRoomKey(code: string): string {
 
 export async function getSession(code: string): Promise<Session | null> {
   try {
-    const session = await redis.get<Session>(getRoomKey(code));
-    return session || null;
+    const raw = await redis.get<string | Session>(getRoomKey(code));
+    if (!raw) return null;
+    if (typeof raw === "string") {
+      return JSON.parse(raw) as Session;
+    }
+    return raw as Session;
   } catch (e) {
     console.error("Error getting session from Redis:", e);
     return null;
@@ -49,7 +47,8 @@ export async function getSession(code: string): Promise<Session | null> {
 
 export async function saveSession(session: Session): Promise<void> {
   try {
-    await redis.set(getRoomKey(session.code), session, { ex: 86400 });
+    const data = JSON.stringify(session);
+    await redis.set(getRoomKey(session.code), data, { ex: 86400 });
   } catch (e) {
     console.error("Error saving session to Redis:", e);
   }
@@ -78,11 +77,12 @@ export async function createSession(data: {
       lastRevealedAt: now,
     };
 
+    const interval = data.revealIntervalSeconds || 60;
     const session: Session = {
       code,
       creatorId: playerId,
-      revealIntervalSeconds: data.revealIntervalSeconds || 60,
-      nextRevealAt: new Date(Date.now() + (data.revealIntervalSeconds || 60) * 1000).toISOString(),
+      revealIntervalSeconds: interval,
+      nextRevealAt: new Date(Date.now() + interval * 1000).toISOString(),
       players: [creator],
       createdAt: now,
     };
@@ -139,41 +139,26 @@ export async function getSessionState(code: string, viewerId: string) {
     const countdownSec = Math.max(0, Math.floor((nextRevealTime - Date.now()) / 1000));
 
     const publicPlayers = session.players.map((player) => {
-      if (player.id === viewer.id || player.role === "Вода" || player.role === "seeker") {
-        return {
-          id: player.id,
-          nickname: player.nickname,
-          role: player.role,
-          color: player.color,
-          lat: player.actualLat,
-          lng: player.actualLng,
-          delayed: false,
-          lastActualAt: toIso(player.lastActualAt),
-          lastRevealedAt: toIso(player.lastRevealedAt),
-        };
-      }
-
+      const isSelfOrSeeker = player.id === viewer.id || player.role === "Вода" || player.role === "seeker";
       return {
         id: player.id,
         nickname: player.nickname,
         role: player.role,
         color: player.color,
-        lat: player.revealedLat,
-        lng: player.revealedLng,
-        delayed: player.actualLat !== player.revealedLat || player.actualLng !== player.revealedLng,
-        lastActualAt: toIso(player.lastActualAt),
-        lastRevealedAt: toIso(player.lastRevealedAt),
+        lat: isSelfOrSeeker ? player.actualLat : player.revealedLat,
+        lng: isSelfOrSeeker ? player.actualLng : player.revealedLng,
+        delayed: isSelfOrSeeker ? false : (player.actualLat !== player.revealedLat || player.actualLng !== player.revealedLng),
+        lastActualAt: player.lastActualAt,
+        lastRevealedAt: player.lastRevealedAt,
       };
     });
-
-    const nextRevealIso = toIso(session.nextRevealAt);
 
     return {
       ok: true,
       data: {
         sessionCode: session.code,
         revealIntervalSeconds: session.revealIntervalSeconds,
-        nextRevealAt: nextRevealIso,
+        nextRevealAt: session.nextRevealAt,
         countdownSec,
         viewer: {
           id: viewer.id,
