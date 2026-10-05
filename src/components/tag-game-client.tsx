@@ -52,8 +52,9 @@ export function TagGameClient() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const storageKey = "tag-game-auth";
+  const storageKey = "tag-game-auth-v2";
 
+  // Восстановление авторизации при загрузке
   useEffect(() => {
     const raw = localStorage.getItem(storageKey);
     if (!raw) return;
@@ -67,8 +68,12 @@ export function TagGameClient() {
     }
   }, []);
 
+  // Сохранение авторизации
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      localStorage.removeItem(storageKey);
+      return;
+    }
     localStorage.setItem(storageKey, JSON.stringify(auth));
   }, [auth]);
 
@@ -101,12 +106,15 @@ export function TagGameClient() {
         return;
       }
 
-      setAuth({
+      const newAuth: AuthState = {
         sessionCode: data.sessionCode,
         playerId: data.playerId,
         nickname: data.nickname,
         role: data.role,
-      });
+      };
+
+      localStorage.setItem(storageKey, JSON.stringify(newAuth));
+      setAuth(newAuth);
       setJoinCode(data.sessionCode);
     } catch {
       setError("Сетевая ошибка при создании комнаты");
@@ -147,12 +155,15 @@ export function TagGameClient() {
         return;
       }
 
-      setAuth({
+      const newAuth: AuthState = {
         sessionCode: data.sessionCode,
         playerId: data.playerId,
         nickname: data.nickname,
         role: data.role,
-      });
+      };
+
+      localStorage.setItem(storageKey, JSON.stringify(newAuth));
+      setAuth(newAuth);
     } catch {
       setError("Сетевая ошибка при входе в комнату");
     } finally {
@@ -161,16 +172,25 @@ export function TagGameClient() {
   }
 
   async function refreshSession() {
-    if (!auth) return;
+    // Читаем auth напрямую из localStorage на случай сброса стейта фоном
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return;
+    let currentAuth: AuthState;
+    try {
+      currentAuth = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (!currentAuth?.sessionCode || !currentAuth?.playerId) return;
 
     try {
       const res = await fetch(
-        `/api/sessions/${auth.sessionCode}?viewerId=${auth.playerId}`,
+        `/api/sessions/${currentAuth.sessionCode}?viewerId=${currentAuth.playerId}`,
         { cache: "no-store" }
       );
 
       if (res.status === 404) {
-        // Комната действительно не найдена на сервере - сбрасываем сессию
         setError("Комната не найдена или её срок действия истёк");
         setAuth(null);
         setSession(null);
@@ -181,30 +201,49 @@ export function TagGameClient() {
       const data = (await res.json()) as SessionView & { error?: string };
 
       if (!res.ok) {
-        // Временная ошибка сервера - не выкидываем из комнаты
-        return;
+        return; // Временный сбой — не трогаем сессию
       }
 
+      setAuth(currentAuth);
       setSession(data);
       setError(null);
     } catch {
-      // Игнорируем мимолётные сетевые лаги, чтобы не кикать игрока
+      // Игнорируем сетевые обрывы в фоне
     }
   }
 
   useEffect(() => {
-    if (!auth) return;
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return;
 
     void refreshSession();
     const timer = window.setInterval(() => {
       void refreshSession();
     }, 3000);
 
-    return () => window.clearInterval(timer);
-  }, [auth]);
+    // Перезапрос данных сразу, когда пользователь возвращается во вкладку из другого браузера
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshSession();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
 
   async function sendCurrentLocation() {
-    if (!auth) return;
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return;
+    let currentAuth: AuthState;
+    try {
+      currentAuth = JSON.parse(raw);
+    } catch {
+      return;
+    }
 
     if (!navigator.geolocation) {
       setError("Геолокация недоступна в браузере");
@@ -217,11 +256,11 @@ export function TagGameClient() {
         const lng = position.coords.longitude;
 
         try {
-          const res = await fetch(`/api/sessions/${auth.sessionCode}/location`, {
+          const res = await fetch(`/api/sessions/${currentAuth.sessionCode}/location`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              playerId: auth.playerId,
+              playerId: currentAuth.playerId,
               lat,
               lng,
             }),
