@@ -33,7 +33,7 @@ export interface Session {
   revealIntervalSeconds: number;
   nextRevealAt: string;
   players: Player[];
-  messages?: ChatMessage[];
+  messages: ChatMessage[];
   createdAt: string;
 }
 
@@ -43,7 +43,7 @@ function getRoomKey(code: string): string {
 
 export async function getSession(code: string): Promise<Session | null> {
   try {
-    const raw = await redis.get<string | Session>(getRoomKey(code));
+    const raw = await redis.get<any>(getRoomKey(code));
     if (!raw) return null;
     if (typeof raw === "string") {
       return JSON.parse(raw) as Session;
@@ -57,95 +57,143 @@ export async function getSession(code: string): Promise<Session | null> {
 
 export async function saveSession(session: Session): Promise<void> {
   try {
-    const data = JSON.stringify(session);
-    await redis.set(getRoomKey(session.code), data, { ex: 86400 });
+    await redis.set(getRoomKey(session.code), session, { ex: 86400 });
   } catch (e) {
     console.error("Error saving session to Redis:", e);
   }
 }
 
-export async function getSessionState(code: string, viewerId: string) {
-  try {
-    const session = await getSession(code);
-    if (!session) {
-      return { ok: false, reason: { status: 404, error: "Комната не найдена" } };
-    }
+export async function createSession(nickname: string, role: string, intervalSec: number) {
+  const code = "TAG-" + Math.floor(1000 + Math.random() * 9000);
+  const creatorId = "p_" + Math.random().toString(36).substring(2, 9);
+  const colors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+  const color = colors[Math.floor(Math.random() * colors.length)];
 
-    const viewer = session.players.find((p) => p.id === viewerId);
-    if (!viewer) {
-      return { ok: false, reason: { status: 403, error: "Игрок не найден в комнате" } };
-    }
+  const player: Player = {
+    id: creatorId,
+    nickname: nickname.trim() || "Игрок",
+    role: role === "seeker" ? "seeker" : "runner",
+    color,
+    actualLat: 0,
+    actualLng: 0,
+    revealedLat: 0,
+    revealedLng: 0,
+    lastActualAt: new Date().toISOString(),
+    lastRevealedAt: new Date().toISOString(),
+  };
 
-    const nextRevealTime = new Date(session.nextRevealAt).getTime();
-    let countdownSec = Math.max(0, Math.floor((nextRevealTime - Date.now()) / 1000));
+  const session: Session = {
+    code,
+    creatorId,
+    revealIntervalSeconds: intervalSec > 0 ? intervalSec : 120,
+    nextRevealAt: new Date(Date.now() + (intervalSec > 0 ? intervalSec : 120) * 1000).toISOString(),
+    players: [player],
+    messages: [],
+    createdAt: new Date().toISOString(),
+  };
 
-    if (Date.now() >= nextRevealTime) {
-      const nextTime = new Date(Date.now() + session.revealIntervalSeconds * 1000).toISOString();
-      session.nextRevealAt = nextTime;
-      countdownSec = session.revealIntervalSeconds;
-
-      session.players = session.players.map((p) => ({
-        ...p,
-        revealedLat: p.actualLat,
-        revealedLng: p.actualLng,
-        lastRevealedAt: new Date().toISOString(),
-      }));
-
-      await saveSession(session);
-    }
-
-    const isSeeker = viewer.role === "seeker" || viewer.role === "Вода";
-
-    const messages = (session.messages || []).filter((msg) => {
-      if (msg.channel === "runners" && isSeeker) {
-        return false;
-      }
-      return true;
-    });
-
-    const publicPlayers = session.players.map((player) => {
-      const isSelfOrSeeker = player.id === viewer.id || player.role === "Вода" || player.role === "seeker";
-      return {
-        id: player.id,
-        nickname: player.nickname,
-        role: player.role,
-        color: player.color,
-        lat: isSelfOrSeeker ? player.actualLat : player.revealedLat,
-        lng: isSelfOrSeeker ? player.actualLng : player.revealedLng,
-        delayed: isSelfOrSeeker ? false : (player.actualLat !== player.revealedLat || player.actualLng !== player.revealedLng),
-        lastActualAt: player.lastActualAt,
-        lastRevealedAt: player.lastRevealedAt,
-      };
-    });
-
-    return {
-      ok: true,
-      data: {
-        sessionCode: session.code,
-        revealIntervalSeconds: session.revealIntervalSeconds,
-        nextRevealAt: session.nextRevealAt,
-        countdownSec,
-        viewer: {
-          id: viewer.id,
-          nickname: viewer.nickname,
-          role: viewer.role,
-          isCreator: viewer.id === session.creatorId,
-        },
-        players: publicPlayers,
-        messages,
-      },
-    };
-  } catch (err) {
-    return { ok: false, reason: { status: 500, error: "Ошибка загрузки состояния" } };
-  }
+  await saveSession(session);
+  return { sessionCode: code, playerId: creatorId, nickname: player.nickname, role: player.role };
 }
 
-export async function addChatMessage(
-  code: string,
-  senderId: string,
-  text: string,
-  channel: "all" | "runners"
-) {
+export async function joinSession(code: string, nickname: string, role: string) {
+  const session = await getSession(code);
+  if (!session) return { ok: false, error: "Комната не найдена" };
+
+  const playerId = "p_" + Math.random().toString(36).substring(2, 9);
+  const colors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+
+  const player: Player = {
+    id: playerId,
+    nickname: nickname.trim() || "Игрок",
+    role: role === "seeker" ? "seeker" : "runner",
+    color,
+    actualLat: 0,
+    actualLng: 0,
+    revealedLat: 0,
+    revealedLng: 0,
+    lastActualAt: new Date().toISOString(),
+    lastRevealedAt: new Date().toISOString(),
+  };
+
+  session.players.push(player);
+  await saveSession(session);
+
+  return { ok: true, sessionCode: session.code, playerId, nickname: player.nickname, role: player.role };
+}
+
+export async function getSessionState(code: string, viewerId: string) {
+  const session = await getSession(code);
+  if (!session) {
+    return { ok: false, reason: { status: 404, error: "Комната не найдена" } };
+  }
+
+  const viewer = session.players.find((p) => p.id === viewerId);
+  if (!viewer) {
+    return { ok: false, reason: { status: 403, error: "Игрок не найден в этой комнате" } };
+  }
+
+  const nextRevealTime = new Date(session.nextRevealAt).getTime();
+  let countdownSec = Math.max(0, Math.floor((nextRevealTime - Date.now()) / 1000));
+
+  if (Date.now() >= nextRevealTime) {
+    const nextTime = new Date(Date.now() + session.revealIntervalSeconds * 1000).toISOString();
+    session.nextRevealAt = nextTime;
+    countdownSec = session.revealIntervalSeconds;
+
+    session.players = session.players.map((p) => ({
+      ...p,
+      revealedLat: p.actualLat,
+      revealedLng: p.actualLng,
+      lastRevealedAt: new Date().toISOString(),
+    }));
+
+    await saveSession(session);
+  }
+
+  const isSeeker = viewer.role === "seeker" || viewer.role === "Вода";
+
+  const messages = (session.messages || []).filter((msg) => {
+    if (msg.channel === "runners" && isSeeker) return false;
+    return true;
+  });
+
+  const publicPlayers = session.players.map((player) => {
+    const isSelfOrSeeker = player.id === viewer.id || player.role === "Вода" || player.role === "seeker";
+    return {
+      id: player.id,
+      nickname: player.nickname,
+      role: player.role,
+      color: player.color,
+      lat: isSelfOrSeeker ? player.actualLat : player.revealedLat,
+      lng: isSelfOrSeeker ? player.actualLng : player.revealedLng,
+      delayed: isSelfOrSeeker ? false : (player.actualLat !== player.revealedLat || player.actualLng !== player.revealedLng),
+      lastActualAt: player.lastActualAt,
+      lastRevealedAt: player.lastRevealedAt,
+    };
+  });
+
+  return {
+    ok: true,
+    data: {
+      sessionCode: session.code,
+      revealIntervalSeconds: session.revealIntervalSeconds,
+      nextRevealAt: session.nextRevealAt,
+      countdownSec,
+      viewer: {
+        id: viewer.id,
+        nickname: viewer.nickname,
+        role: viewer.role,
+        isCreator: viewer.id === session.creatorId,
+      },
+      players: publicPlayers,
+      messages,
+    },
+  };
+}
+
+export async function addChatMessage(code: string, senderId: string, text: string, channel: "all" | "runners") {
   const session = await getSession(code);
   if (!session) return { ok: false, error: "Комната не найдена" };
 
@@ -166,25 +214,15 @@ export async function addChatMessage(
     createdAt: new Date().toISOString(),
   };
 
-  if (!session.messages) {
-    session.messages = [];
-  }
-
+  if (!session.messages) session.messages = [];
   session.messages.push(newMessage);
-  if (session.messages.length > 100) {
-    session.messages = session.messages.slice(-100);
-  }
+  if (session.messages.length > 100) session.messages = session.messages.slice(-100);
 
   await saveSession(session);
   return { ok: true, message: newMessage };
 }
 
-export async function updatePlayerLocation(
-  code: string,
-  playerId: string,
-  lat: number,
-  lng: number
-) {
+export async function updatePlayerLocation(code: string, playerId: string, lat: number, lng: number) {
   const session = await getSession(code);
   if (!session) return { ok: false, error: "Комната не найдена" };
 

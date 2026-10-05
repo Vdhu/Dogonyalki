@@ -1,30 +1,24 @@
-import { fail, ok, safeJson } from "@/lib/api";
-import { joinSession, validateRole } from "@/lib/tag-store";
+import { fail, ok } from "@/lib/api";
+import { joinSession } from "@/lib/tag-store";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  try {
+    const { id } = await params;
+    const body = await req.json();
+    const { nickname, role } = body;
 
-  const parsed = await safeJson(req);
-  if (!parsed.ok) {
-    return fail("Некорректное тело запроса", 400);
+    if (!id) return fail("Код комнаты не указан", 400);
+
+    const res = await joinSession(id, nickname || "Игрок", role || "runner");
+    if (!res.ok) {
+      return fail(res.error ?? "Не удалось войти", 400);
+    }
+
+    return ok(res);
+  } catch (err) {
+    console.error("Join room error:", err);
+    return fail("Ошибка при входе в комнату", 500);
   }
-
-  const body = parsed.data as {
-    nickname?: unknown;
-    role?: unknown;
-  };
-
-  const result = await joinSession({
-    sessionCode: id,
-    nickname: typeof body.nickname === "string" ? body.nickname : "",
-    role: validateRole(body.role),
-  });
-
-  if (!result.ok) {
-    return fail(result.reason.error, result.reason.status);
-  }
-
-  return ok(result);
 }

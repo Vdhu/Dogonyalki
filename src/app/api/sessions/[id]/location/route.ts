@@ -15,11 +15,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     const result = await updatePlayerLocation(id, playerId, lat, lng);
     if (!result.ok) {
-      return fail(result.error ?? "Ошибка обновления локации", 400);
+      return fail(result.error ?? "Ошибка геолокации", 400);
     }
 
     return ok({ success: true });
   } catch (err) {
-    return fail("Внутренняя ошибка сервера", 500);
+    return fail("Ошибка обновления геолокации", 500);
   }
 }

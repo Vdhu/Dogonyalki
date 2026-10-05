@@ -7,10 +7,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   try {
     const { id } = await params;
     const { searchParams } = new URL(req.url);
-    const viewerId = searchParams.get("viewerId") || searchParams.get("nxtPid");
+    const viewerId = searchParams.get("viewerId");
 
     if (!id || !viewerId) {
-      return fail("Неверные параметры запроса", 400);
+      return fail("Неверные параметры", 400);
     }
 
     const result = await getSessionState(id, viewerId);
@@ -21,7 +21,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     return ok(result.data);
   } catch (err) {
-    console.error("Error in session route:", err);
+    console.error("Get session error:", err);
     return fail("Внутренняя ошибка сервера", 500);
   }
 }

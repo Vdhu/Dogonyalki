@@ -10,7 +10,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const { playerId, text, channel } = body;
 
     if (!id || !playerId || !text) {
-      return fail("Неполные данные запроса", 400);
+      return fail("Неполные данные", 400);
     }
 
     const selectedChannel = channel === "runners" ? "runners" : "all";
@@ -22,6 +22,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     return ok(result.message);
   } catch (err) {
-    return fail("Внутренняя ошибка сервера", 500);
+    return fail("Ошибка отправки чата", 500);
   }
 }

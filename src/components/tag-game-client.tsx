@@ -46,7 +46,7 @@ type AuthState = {
 };
 
 function formatCoord(value: number | null): string {
-  if (value === null) return "—";
+  if (value === null || value === 0) return "—";
   return value.toFixed(6);
 }
 
@@ -66,18 +66,15 @@ export function TagGameClient() {
   const [chatText, setChatText] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
 
-  const storageKey = "tag-game-auth-v3";
+  const storageKey = "tag-game-auth-v4";
 
   useEffect(() => {
-    const raw = localStorage.getItem(storageKey) || localStorage.getItem("tag-game-auth-v2");
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw) as AuthState;
-      if (parsed?.sessionCode && parsed?.playerId && parsed.playerId !== parsed.sessionCode) {
+      if (parsed?.sessionCode && parsed?.playerId) {
         setAuth(parsed);
-      } else {
-        localStorage.removeItem(storageKey);
-        localStorage.removeItem("tag-game-auth-v2");
       }
     } catch {
       localStorage.removeItem(storageKey);
@@ -100,29 +97,24 @@ export function TagGameClient() {
         }),
       });
 
-      const data = (await res.json()) as {
-        error?: string;
-        sessionCode?: string;
-        playerId?: string;
-        nickname?: string;
-        role?: Role;
-      };
+      const data = await res.json();
+      const payload = data.data || data;
 
-      if (!res.ok || !data.sessionCode || !data.playerId || !data.role || !data.nickname) {
+      if (!res.ok || !payload.sessionCode || !payload.playerId) {
         setError(data.error ?? "Не удалось создать комнату");
         return;
       }
 
       const newAuth: AuthState = {
-        sessionCode: data.sessionCode,
-        playerId: data.playerId,
-        nickname: data.nickname,
-        role: data.role,
+        sessionCode: payload.sessionCode,
+        playerId: payload.playerId,
+        nickname: payload.nickname,
+        role: payload.role,
       };
 
       localStorage.setItem(storageKey, JSON.stringify(newAuth));
       setAuth(newAuth);
-      setJoinCode(data.sessionCode);
+      setJoinCode(payload.sessionCode);
     } catch {
       setError("Сетевая ошибка при создании комнаты");
     } finally {
@@ -149,24 +141,19 @@ export function TagGameClient() {
         body: JSON.stringify({ nickname, role }),
       });
 
-      const data = (await res.json()) as {
-        error?: string;
-        sessionCode?: string;
-        playerId?: string;
-        nickname?: string;
-        role?: Role;
-      };
+      const data = await res.json();
+      const payload = data.data || data;
 
-      if (!res.ok || !data.sessionCode || !data.playerId || !data.role || !data.nickname) {
+      if (!res.ok || !payload.sessionCode || !payload.playerId) {
         setError(data.error ?? "Не удалось войти в комнату");
         return;
       }
 
       const newAuth: AuthState = {
-        sessionCode: data.sessionCode,
-        playerId: data.playerId,
-        nickname: data.nickname,
-        role: data.role,
+        sessionCode: payload.sessionCode,
+        playerId: payload.playerId,
+        nickname: payload.nickname,
+        role: payload.role,
       };
 
       localStorage.setItem(storageKey, JSON.stringify(newAuth));
@@ -179,13 +166,7 @@ export function TagGameClient() {
   }
 
   async function refreshSession() {
-    if (!auth) return;
-    if (auth.playerId === auth.sessionCode) {
-      setAuth(null);
-      setSession(null);
-      localStorage.removeItem(storageKey);
-      return;
-    }
+    if (!auth?.sessionCode || !auth?.playerId) return;
 
     try {
       const res = await fetch(
@@ -193,21 +174,19 @@ export function TagGameClient() {
         { cache: "no-store" }
       );
 
-      if (res.status === 404 || res.status === 403) {
-        setAuth(null);
-        setSession(null);
-        localStorage.removeItem(storageKey);
-        setError("Сессия истекла или была удалена. Создайте комнату заново.");
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 404) {
+          setError("Комната не найдена на сервере");
+        }
         return;
       }
 
-      const data = (await res.json()) as SessionView & { error?: string };
-      if (!res.ok) return;
-
-      setSession(data);
+      const payload = data.data || data;
+      setSession(payload);
       setError(null);
     } catch {
-      // Игнорируем временные сетевые сбои
+      // Игнорируем сетевые сбои
     }
   }
 
@@ -217,18 +196,10 @@ export function TagGameClient() {
     void refreshSession();
     const timer = window.setInterval(() => {
       void refreshSession();
-    }, 3000);
-
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") {
-        void refreshSession();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
+    }, 2000);
 
     return () => {
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [auth]);
 
@@ -248,7 +219,7 @@ export function TagGameClient() {
         });
       },
       () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
 
     return () => {
@@ -291,7 +262,7 @@ export function TagGameClient() {
   }, [session?.messages, chatTab]);
 
   const sortedPlayers = useMemo(() => {
-    if (!session) return [];
+    if (!session?.players) return [];
     return [...session.players].sort((a, b) => {
       if (a.id === session.viewer.id) return -1;
       if (b.id === session.viewer.id) return 1;
@@ -397,7 +368,7 @@ export function TagGameClient() {
                     До следующего reveal: <strong>{session.countdownSec} сек</strong>
                   </p>
                 ) : (
-                  <p className="text-sm text-amber-600">Загрузка данных сессии...</p>
+                  <p className="text-sm text-amber-600">Загрузка данных комнаты...</p>
                 )}
               </div>
 
@@ -517,7 +488,7 @@ export function TagGameClient() {
                 maxLength={300}
               />
               <button
-                disabled={sendingMsg || !chatText.trim() || !session}
+                disabled={sendingMsg || !chatText.trim()}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
               >
                 Отправить

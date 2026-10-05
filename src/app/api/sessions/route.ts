@@ -1,34 +1,17 @@
-import { fail, ok, safeJson } from "@/lib/api";
-import { createSession, validateRole } from "@/lib/tag-store";
+import { fail, ok } from "@/lib/api";
+import { createSession } from "@/lib/tag-store";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const parsed = await safeJson(req);
-  if (!parsed.ok) {
-    return fail("Некорректное тело запроса", 400);
+  try {
+    const body = await req.json();
+    const { nickname, role, revealIntervalSeconds } = body;
+
+    const res = await createSession(nickname || "Игрок", role || "runner", Number(revealIntervalSeconds) || 120);
+    return ok(res);
+  } catch (err) {
+    console.error("Create session error:", err);
+    return fail("Внутренняя ошибка сервера", 500);
   }
-
-  const body = parsed.data as {
-    nickname?: unknown;
-    role?: unknown;
-    revealIntervalSeconds?: unknown;
-  };
-
-  const revealIntervalSeconds =
-    typeof body.revealIntervalSeconds === "number"
-      ? body.revealIntervalSeconds
-      : Number(body.revealIntervalSeconds ?? Number.NaN);
-
-  const result = await createSession({
-    nickname: typeof body.nickname === "string" ? body.nickname : "",
-    role: validateRole(body.role),
-    revealIntervalSeconds,
-  });
-
-  if (!result.ok) {
-    return fail(result.reason.error, result.reason.status);
-  }
-
-  return ok(result);
 }
