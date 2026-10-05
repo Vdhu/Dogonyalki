@@ -87,6 +87,7 @@ export function TagGameClient() {
           revealIntervalSeconds: intervalSec,
         }),
       });
+
       const data = (await res.json()) as {
         error?: string;
         sessionCode?: string;
@@ -163,18 +164,31 @@ export function TagGameClient() {
     if (!auth) return;
 
     try {
-      const res = await fetch(`/api/sessions/${auth.sessionCode}?viewerId=${auth.playerId}`, {
-        cache: "no-store",
-      });
-      const data = (await res.json()) as SessionView & { error?: string };
-      if (!res.ok) {
-        setError(data.error ?? "Комната недоступна");
+      const res = await fetch(
+        `/api/sessions/${auth.sessionCode}?viewerId=${auth.playerId}`,
+        { cache: "no-store" }
+      );
+
+      if (res.status === 404) {
+        // Комната действительно не найдена на сервере - сбрасываем сессию
+        setError("Комната не найдена или её срок действия истёк");
+        setAuth(null);
+        setSession(null);
+        localStorage.removeItem(storageKey);
         return;
       }
+
+      const data = (await res.json()) as SessionView & { error?: string };
+
+      if (!res.ok) {
+        // Временная ошибка сервера - не выкидываем из комнаты
+        return;
+      }
+
       setSession(data);
       setError(null);
     } catch {
-      setError("Сетевая ошибка при получении состояния");
+      // Игнорируем мимолётные сетевые лаги, чтобы не кикать игрока
     }
   }
 
@@ -245,9 +259,9 @@ export function TagGameClient() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
       <header className="rounded-2xl bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-bold text-slate-900">Tag Game — серверная версия для Vercel</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Tag Game</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Сессии и игроки хранятся в PostgreSQL. Нет зависимости от in-memory, поэтому cold start не ломает комнаты.
+          Управление догонялками в реальном времени.
         </p>
       </header>
 
@@ -264,7 +278,11 @@ export function TagGameClient() {
             />
 
             <label className="mt-4 block text-sm">Роль</label>
-            <select className="mt-1 w-full rounded-lg border px-3 py-2" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+            <select
+              className="mt-1 w-full rounded-lg border px-3 py-2"
+              value={role}
+              onChange={(e) => setRole(e.target.value as Role)}
+            >
               <option value="runner">Убегающий (runner)</option>
               <option value="seeker">Вода (seeker)</option>
             </select>
@@ -279,7 +297,10 @@ export function TagGameClient() {
               max={3600}
             />
 
-            <button disabled={loading} className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-white disabled:opacity-60">
+            <button
+              disabled={loading}
+              className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-white disabled:opacity-60"
+            >
               {loading ? "Создаю..." : "Создать"}
             </button>
           </form>
@@ -288,7 +309,7 @@ export function TagGameClient() {
             <h2 className="text-lg font-semibold">Войти в комнату</h2>
             <label className="mt-4 block text-sm">Код комнаты</label>
             <input
-              className="mt-1 w-full rounded-lg border px-3 py-2 uppercase"
+              className="mt-1 w-full rounded-lg border px-3 py-2"
               value={joinCode}
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
             />
@@ -302,12 +323,19 @@ export function TagGameClient() {
             />
 
             <label className="mt-4 block text-sm">Роль</label>
-            <select className="mt-1 w-full rounded-lg border px-3 py-2" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+            <select
+              className="mt-1 w-full rounded-lg border px-3 py-2"
+              value={role}
+              onChange={(e) => setRole(e.target.value as Role)}
+            >
               <option value="runner">Убегающий (runner)</option>
               <option value="seeker">Вода (seeker)</option>
             </select>
 
-            <button disabled={loading} className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60">
+            <button
+              disabled={loading}
+              className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
+            >
               {loading ? "Вхожу..." : "Войти"}
             </button>
           </form>
@@ -324,11 +352,18 @@ export function TagGameClient() {
                 </p>
               ) : null}
             </div>
+
             <div className="flex gap-2">
-              <button onClick={() => void refreshSession()} className="rounded-lg border px-3 py-2 text-sm">
+              <button
+                onClick={() => void refreshSession()}
+                className="rounded-lg border px-3 py-2 text-sm"
+              >
                 Обновить
               </button>
-              <button onClick={() => void sendCurrentLocation()} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white">
+              <button
+                onClick={() => void sendCurrentLocation()}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white"
+              >
                 Отправить мою геопозицию
               </button>
               <button
@@ -360,15 +395,26 @@ export function TagGameClient() {
                   <tr key={player.id} className="border-b last:border-0">
                     <td className="py-2 pr-4">
                       <span className="inline-flex items-center gap-2">
-                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: player.color }} />
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: player.color }}
+                        />
                         {player.nickname}
                         {session?.viewer.id === player.id ? <strong>(Вы)</strong> : null}
                       </span>
                     </td>
-                    <td className="py-2 pr-4">{player.role === "seeker" ? "Вода" : "Убегающий"}</td>
-                    <td className="py-2 pr-4 tabular-nums">{formatCoord(player.lat)}</td>
-                    <td className="py-2 pr-4 tabular-nums">{formatCoord(player.lng)}</td>
-                    <td className="py-2 pr-4">{player.delayed ? "Отложенные данные" : "Актуальные данные"}</td>
+                    <td className="py-2 pr-4">
+                      {player.role === "seeker" ? "Вода" : "Убегающий"}
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums">
+                      {formatCoord(player.lat)}
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums">
+                      {formatCoord(player.lng)}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {player.delayed ? "Отложенные данные" : "Актуальные данные"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -377,7 +423,9 @@ export function TagGameClient() {
         </section>
       )}
 
-      {error ? <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
+      {error ? (
+        <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>
+      ) : null}
     </main>
   );
 }
