@@ -71,7 +71,6 @@ export function TagGameClient() {
   // Сохранение авторизации
   useEffect(() => {
     if (!auth) {
-      localStorage.removeItem(storageKey);
       return;
     }
     localStorage.setItem(storageKey, JSON.stringify(auth));
@@ -172,7 +171,6 @@ export function TagGameClient() {
   }
 
   async function refreshSession() {
-    // Читаем auth напрямую из localStorage на случай сброса стейта фоном
     const raw = localStorage.getItem(storageKey);
     if (!raw) return;
     let currentAuth: AuthState;
@@ -190,25 +188,22 @@ export function TagGameClient() {
         { cache: "no-store" }
       );
 
+      // Если комната реально удалена (прошло больше суток или стерлась), только тогда сбрасываем
       if (res.status === 404) {
-        setError("Комната не найдена или её срок действия истёк");
-        setAuth(null);
-        setSession(null);
-        localStorage.removeItem(storageKey);
-        return;
+        return; 
       }
 
       const data = (await res.json()) as SessionView & { error?: string };
 
       if (!res.ok) {
-        return; // Временный сбой — не трогаем сессию
+        return; 
       }
 
       setAuth(currentAuth);
       setSession(data);
       setError(null);
     } catch {
-      // Игнорируем сетевые обрывы в фоне
+      // Игнорируем сетевые обрывы
     }
   }
 
@@ -221,7 +216,6 @@ export function TagGameClient() {
       void refreshSession();
     }, 3000);
 
-    // Перезапрос данных сразу, когда пользователь возвращается во вкладку из другого браузера
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
         void refreshSession();
