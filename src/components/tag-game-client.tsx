@@ -1,506 +1,416 @@
-"use client";
+'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { useState, useEffect } from "react";
 
-type Role = "seeker" | "runner";
+interface Player {
+  id: string;
+  nickname: string;
+  role: string;
+  color: string;
+  actualLat: number;
+  actualLng: number;
+  revealedLat: number;
+  revealedLng: number;
+  lastActualAt: string;
+  lastRevealedAt: string;
+}
 
-type ChatMessage = {
+interface ChatMessage {
   id: string;
   senderId: string;
   senderNickname: string;
   text: string;
   channel: "all" | "runners";
   createdAt: string;
-};
+}
 
-type SessionView = {
-  sessionCode: string;
+interface Session {
+  code: string;
+  creatorId: string;
   revealIntervalSeconds: number;
   nextRevealAt: string;
-  countdownSec: number;
-  viewer: {
-    id: string;
-    nickname: string;
-    role: Role;
-    isCreator: boolean;
-  };
-  players: {
-    id: string;
-    nickname: string;
-    role: Role;
-    color: string;
-    lat: number | null;
-    lng: number | null;
-    delayed: boolean;
-    lastActualAt: string | null;
-    lastRevealedAt: string | null;
-  }[];
+  players: Player[];
   messages: ChatMessage[];
-};
-
-type AuthState = {
-  sessionCode: string;
-  playerId: string;
-  nickname: string;
-  role: Role;
-};
-
-function formatCoord(value: number | null): string {
-  if (value === null || value === 0) return "—";
-  return value.toFixed(6);
+  createdAt: string;
 }
 
 export function TagGameClient() {
   const [nickname, setNickname] = useState("Игрок");
-  const [role, setRole] = useState<Role>("runner");
-  const [intervalSec, setIntervalSec] = useState(120);
+  const [roomCode, setRoomCode] = useState("");
+  const [revealInterval, setRevealInterval] = useState(300);
 
-  const [joinCode, setJoinCode] = useState("");
+  const [auth, setAuth] = useState<{ roomCode: string; playerId: string } | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
 
-  const [auth, setAuth] = useState<AuthState | null>(null);
-  const [session, setSession] = useState<SessionView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<"players" | "chat" | "settings">("players");
+  const [chatChannel, setChatChannel] = useState<"all" | "runners">("all");
+  const [messageText, setMessageText] = useState("");
+  const [gpsStatus, setGpsStatus] = useState("Инициализация...");
 
-  const [chatTab, setChatTab] = useState<"all" | "runners">("all");
-  const [chatText, setChatText] = useState("");
-  const [sendingMsg, setSendingMsg] = useState(false);
-
-  const storageKey = "tag-game-auth-v4";
+  const storageKey = "tag_game_auth_v5";
 
   useEffect(() => {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as AuthState;
-      if (parsed?.sessionCode && parsed?.playerId) {
-        setAuth(parsed);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed.roomCode && parsed.playerId) {
+          setAuth(parsed);
+        }
+      } catch (e) {
+        console.error("Ошибка при чтении авторизации:", e);
       }
-    } catch {
-      localStorage.removeItem(storageKey);
     }
   }, []);
 
-  async function createRoom(e: FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
+  const saveAuth = (code: string, id: string) => {
+    const data = { roomCode: code, playerId: id };
+    setAuth(data);
+    localStorage.setItem(storageKey, JSON.stringify(data));
+  };
 
+  const clearAuth = () => {
+    setAuth(null);
+    setSession(null);
+    localStorage.removeItem(storageKey);
+  };
+
+  const refreshSession = async () => {
+    if (!auth) return;
     try {
-      const res = await fetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nickname,
-          role,
-          revealIntervalSeconds: intervalSec,
-        }),
-      });
-
-      const data = await res.json();
-      const payload = data.data || data;
-
-      if (!res.ok || !payload.sessionCode || !payload.playerId) {
-        setError(data.error ?? "Не удалось создать комнату");
-        return;
+      const res = await fetch(`/api/sessions/${auth.roomCode}?viewerId=${auth.playerId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSession(data);
+      } else if (res.status === 404) {
+        setGpsStatus("Комната не найдена");
       }
-
-      const newAuth: AuthState = {
-        sessionCode: payload.sessionCode,
-        playerId: payload.playerId,
-        nickname: payload.nickname,
-        role: payload.role,
-      };
-
-      localStorage.setItem(storageKey, JSON.stringify(newAuth));
-      setAuth(newAuth);
-      setJoinCode(payload.sessionCode);
-    } catch {
-      setError("Сетевая ошибка при создании комнаты");
-    } finally {
-      setLoading(false);
+    } catch (e) {
+      console.error("Ошибка обновления сессии:", e);
     }
-  }
-
-  async function joinRoom(e: FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    const code = joinCode.trim().toUpperCase();
-    if (!code) {
-      setError("Укажите код комнаты");
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/sessions/${code}/join`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nickname, role }),
-      });
-
-      const data = await res.json();
-      const payload = data.data || data;
-
-      if (!res.ok || !payload.sessionCode || !payload.playerId) {
-        setError(data.error ?? "Не удалось войти в комнату");
-        return;
-      }
-
-      const newAuth: AuthState = {
-        sessionCode: payload.sessionCode,
-        playerId: payload.playerId,
-        nickname: payload.nickname,
-        role: payload.role,
-      };
-
-      localStorage.setItem(storageKey, JSON.stringify(newAuth));
-      setAuth(newAuth);
-    } catch {
-      setError("Сетевая ошибка при входе в комнату");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function refreshSession() {
-    if (!auth?.sessionCode || !auth?.playerId) return;
-
-    try {
-      const res = await fetch(
-        `/api/sessions/${auth.sessionCode}?viewerId=${auth.playerId}`,
-        { cache: "no-store" }
-      );
-
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 404) {
-          setError("Комната не найдена на сервере");
-        }
-        return;
-      }
-
-      const payload = data.data || data;
-      setSession(payload);
-      setError(null);
-    } catch {
-      // Игнорируем сетевые сбои
-    }
-  }
+  };
 
   useEffect(() => {
     if (!auth) return;
 
     void refreshSession();
-    const timer = window.setInterval(() => {
+    const timer = setInterval(() => {
       void refreshSession();
     }, 2000);
 
-    return () => {
-      window.clearInterval(timer);
-    };
+    return () => clearInterval(timer);
   }, [auth]);
 
   useEffect(() => {
-    if (!auth || !navigator.geolocation) return;
+    if (!auth || !("geolocation" in navigator)) {
+      setGpsStatus("Геолокация недоступна");
+      return;
+    }
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        void fetch(`/api/sessions/${auth.sessionCode}/location`, {
+        const { latitude, longitude } = pos.coords;
+        setGpsStatus(`GPS OK (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`);
+
+        void fetch(`/api/sessions/${auth.roomCode}/location`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             playerId: auth.playerId,
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
+            lat: latitude,
+            lng: longitude,
           }),
         });
       },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      (err) => {
+        setGpsStatus(`Ошибка GPS: ${err.message}`);
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
 
-    return () => {
-      navigator.geolocation.clearWatch(watchId);
-    };
+    return () => navigator.geolocation.clearWatch(watchId);
   }, [auth]);
 
-  async function sendMessage(e: FormEvent) {
-    e.preventDefault();
-    if (!chatText.trim() || !auth || sendingMsg) return;
-
-    setSendingMsg(true);
+  const handleCreateRoom = async () => {
     try {
-      const res = await fetch(`/api/sessions/${auth.sessionCode}/chat`, {
+      const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          playerId: auth.playerId,
-          text: chatText,
-          channel: chatTab,
-        }),
+        body: JSON.stringify({ revealIntervalSeconds: revealInterval }),
+      });
+
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const joinRes = await fetch(`/api/sessions/${data.code}/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nickname: nickname || "Создатель" }),
+      });
+
+      if (joinRes.ok) {
+        const joinData = await joinRes.json();
+        saveAuth(joinData.session.code, joinData.playerId);
+      }
+    } catch (e) {
+      console.error("Ошибка создания комнаты:", e);
+    }
+  };
+
+  const handleJoinRoom = async () => {
+    if (!roomCode) return;
+    try {
+      const res = await fetch(`/api/sessions/${roomCode.trim().toUpperCase()}/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nickname: nickname || "Игрок" }),
       });
 
       if (res.ok) {
-        setChatText("");
-        await refreshSession();
+        const data = await res.json();
+        saveAuth(data.session.code, data.playerId);
+      } else {
+        alert("Не удалось войти. Проверьте код комнаты.");
       }
-    } catch {
-      // Игнорируем
-    } finally {
-      setSendingMsg(false);
+    } catch (e) {
+      console.error("Ошибка входа:", e);
     }
-  }
+  };
 
-  const isSeeker = session?.viewer.role === "seeker" || session?.viewer.role === "Вода";
-
-  const filteredMessages = useMemo(() => {
-    if (!session?.messages) return [];
-    return session.messages.filter((m) => m.channel === chatTab);
-  }, [session?.messages, chatTab]);
-
-  const sortedPlayers = useMemo(() => {
-    if (!session?.players) return [];
-    return [...session.players].sort((a, b) => {
-      if (a.id === session.viewer.id) return -1;
-      if (b.id === session.viewer.id) return 1;
-      if (a.role === "seeker" && b.role !== "seeker") return -1;
-      if (b.role === "seeker" && a.role !== "seeker") return 1;
-      return a.nickname.localeCompare(b.nickname);
+  const handleRoleChange = async (role: string) => {
+    if (!auth) return;
+    await fetch(`/api/sessions/${auth.roomCode}/role`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: auth.playerId, role }),
     });
-  }, [session]);
+    void refreshSession();
+  };
 
-  return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
-      <header className="rounded-2xl bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-bold text-slate-900">Tag Game</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Управление догонялками в реальном времени.
-        </p>
-      </header>
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!auth || !messageText.trim()) return;
 
-      {!auth ? (
-        <section className="grid gap-4 md:grid-cols-2">
-          <form onSubmit={createRoom} className="rounded-2xl bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold">Создать комнату</h2>
-            <label className="mt-4 block text-sm">Никнейм</label>
+    await fetch(`/api/sessions/${auth.roomCode}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        senderId: auth.playerId,
+        text: messageText,
+        channel: chatChannel,
+      }),
+    });
+
+    setMessageText("");
+    void refreshSession();
+  };
+
+  if (!auth) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-slate-800 p-6 rounded-2xl shadow-xl space-y-6">
+          <h1 className="text-2xl font-bold text-center text-emerald-400">Догонялки GPS</h1>
+
+          <div className="space-y-2">
+            <label className="text-sm text-slate-400">Ваш никнейм</label>
             <input
-              className="mt-1 w-full rounded-lg border px-3 py-2"
+              type="text"
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
-              maxLength={40}
+              className="w-full bg-slate-700 p-3 rounded-xl border border-slate-600 text-white focus:outline-none focus:border-emerald-400"
             />
-
-            <label className="mt-4 block text-sm">Роль</label>
-            <select
-              className="mt-1 w-full rounded-lg border px-3 py-2"
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-            >
-              <option value="runner">Убегающий (runner)</option>
-              <option value="seeker">Вода (seeker)</option>
-            </select>
-
-            <label className="mt-4 block text-sm">Интервал reveal (сек)</label>
-            <input
-              type="number"
-              className="mt-1 w-full rounded-lg border px-3 py-2"
-              value={intervalSec}
-              onChange={(e) => setIntervalSec(Number(e.target.value))}
-              min={10}
-              max={3600}
-            />
-
-            <button
-              disabled={loading}
-              className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-white disabled:opacity-60"
-            >
-              {loading ? "Создаю..." : "Создать"}
-            </button>
-          </form>
-
-          <form onSubmit={joinRoom} className="rounded-2xl bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold">Войти в комнату</h2>
-            <label className="mt-4 block text-sm">Код комнаты</label>
-            <input
-              className="mt-1 w-full rounded-lg border px-3 py-2"
-              value={joinCode}
-              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-            />
-
-            <label className="mt-4 block text-sm">Никнейм</label>
-            <input
-              className="mt-1 w-full rounded-lg border px-3 py-2"
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value)}
-              maxLength={40}
-            />
-
-            <label className="mt-4 block text-sm">Роль</label>
-            <select
-              className="mt-1 w-full rounded-lg border px-3 py-2"
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-            >
-              <option value="runner">Убегающий (runner)</option>
-              <option value="seeker">Вода (seeker)</option>
-            </select>
-
-            <button
-              disabled={loading}
-              className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
-            >
-              {loading ? "Вхожу..." : "Войти"}
-            </button>
-          </form>
-        </section>
-      ) : (
-        <section className="flex flex-col gap-6">
-          <div className="rounded-2xl bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-sm text-slate-500">Комната</p>
-                <p className="text-xl font-semibold">{auth.sessionCode}</p>
-                {session ? (
-                  <p className="text-sm text-slate-600">
-                    До следующего reveal: <strong>{session.countdownSec} сек</strong>
-                  </p>
-                ) : (
-                  <p className="text-sm text-amber-600">Загрузка данных комнаты...</p>
-                )}
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => void refreshSession()}
-                  className="rounded-lg border px-3 py-2 text-sm"
-                >
-                  Обновить
-                </button>
-                <button
-                  onClick={() => {
-                    setAuth(null);
-                    setSession(null);
-                    localStorage.removeItem(storageKey);
-                  }}
-                  className="rounded-lg bg-slate-200 px-3 py-2 text-sm"
-                >
-                  Выйти
-                </button>
-              </div>
-            </div>
-
-            {session ? (
-              <div className="mt-6 overflow-x-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b text-slate-500">
-                      <th className="py-2 pr-4">Игрок</th>
-                      <th className="py-2 pr-4">Роль</th>
-                      <th className="py-2 pr-4">Видимая Lat</th>
-                      <th className="py-2 pr-4">Видимая Lng</th>
-                      <th className="py-2 pr-4">Статус</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedPlayers.map((player) => (
-                      <tr key={player.id} className="border-b last:border-0">
-                        <td className="py-2 pr-4">
-                          <span className="inline-flex items-center gap-2">
-                            <span
-                              className="h-2.5 w-2.5 rounded-full"
-                              style={{ backgroundColor: player.color }}
-                            />
-                            {player.nickname}
-                            {session.viewer.id === player.id ? <strong>(Вы)</strong> : null}
-                          </span>
-                        </td>
-                        <td className="py-2 pr-4">
-                          {player.role === "seeker" || player.role === "Вода" ? "Вода" : "Убегающий"}
-                        </td>
-                        <td className="py-2 pr-4 tabular-nums">
-                          {formatCoord(player.lat)}
-                        </td>
-                        <td className="py-2 pr-4 tabular-nums">
-                          {formatCoord(player.lng)}
-                        </td>
-                        <td className="py-2 pr-4">
-                          {player.delayed ? "Отложенные данные" : "Актуальные данные"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
           </div>
 
-          <div className="rounded-2xl bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold mb-3">Чат</h2>
+          <div className="border-t border-slate-700 pt-4 space-y-3">
+            <h2 className="text-lg font-semibold">Присоединиться к игре</h2>
+            <input
+              type="text"
+              placeholder="Код комнаты (напр. TAG-1234)"
+              value={roomCode}
+              onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+              className="w-full bg-slate-700 p-3 rounded-xl border border-slate-600 text-white focus:outline-none focus:border-emerald-400"
+            />
+            <button
+              onClick={handleJoinRoom}
+              className="w-full bg-emerald-500 hover:bg-emerald-600 py-3 rounded-xl font-semibold transition"
+            >
+              Войти в комнату
+            </button>
+          </div>
 
-            <div className="flex gap-2 border-b pb-3 mb-4">
+          <div className="border-t border-slate-700 pt-4 space-y-3">
+            <h2 className="text-lg font-semibold">Создать новую игру</h2>
+            <div className="space-y-1">
+              <label className="text-sm text-slate-400">Интервал раскрытия GPS (сек)</label>
+              <input
+                type="number"
+                value={revealInterval}
+                onChange={(e) => setRevealInterval(Number(e.target.value))}
+                className="w-full bg-slate-700 p-3 rounded-xl border border-slate-600 text-white focus:outline-none focus:border-emerald-400"
+              />
+            </div>
+            <button
+              onClick={handleCreateRoom}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 py-3 rounded-xl font-semibold transition"
+            >
+              Создать комнату
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const me = session?.players.find((p) => p.id === auth.playerId);
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
+      <header className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center">
+        <div>
+          <span className="text-xs text-slate-400 block">Комната</span>
+          <span className="text-xl font-extrabold text-emerald-400 tracking-wider">{auth.roomCode}</span>
+        </div>
+        <div className="text-right">
+          <span className="text-xs text-slate-400 block">Статус GPS</span>
+          <span className="text-xs text-emerald-300">{gpsStatus}</span>
+        </div>
+        <button
+          onClick={clearAuth}
+          className="bg-rose-500/20 text-rose-300 border border-rose-500/40 px-3 py-1.5 rounded-lg text-sm hover:bg-rose-500/30 transition"
+        >
+          Выйти
+        </button>
+      </header>
+
+      <div className="flex border-b border-slate-700 bg-slate-800/50">
+        <button
+          onClick={() => setActiveTab("players")}
+          className={`flex-1 py-3 text-sm font-medium ${
+            activeTab === "players" ? "text-emerald-400 border-b-2 border-emerald-400" : "text-slate-400"
+          }`}
+        >
+          Игроки ({session?.players.length || 0})
+        </button>
+        <button
+          onClick={() => setActiveTab("chat")}
+          className={`flex-1 py-3 text-sm font-medium ${
+            activeTab === "chat" ? "text-emerald-400 border-b-2 border-emerald-400" : "text-slate-400"
+          }`}
+        >
+          Чат ({session?.messages.length || 0})
+        </button>
+        <button
+          onClick={() => setActiveTab("settings")}
+          className={`flex-1 py-3 text-sm font-medium ${
+            activeTab === "settings" ? "text-emerald-400 border-b-2 border-emerald-400" : "text-slate-400"
+          }`}
+        >
+          Настройки
+        </button>
+      </div>
+
+      <main className="flex-1 p-4 overflow-y-auto">
+        {activeTab === "players" && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Участники комнаты</h2>
+            {session?.players.map((p) => (
+              <div key={p.id} className="bg-slate-800 p-4 rounded-xl border border-slate-700 flex justify-between items-center">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="w-3 h-3 rounded-full" style={{ backgroundColor: p.color }} />
+                    <span className="font-semibold">{p.nickname}</span>
+                    {p.id === auth.playerId && <span className="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded">(Вы)</span>}
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1">
+                    Роль: <span className="text-emerald-300 capitalize">{p.role === "hunter" ? "Охотник" : "Убегающий"}</span>
+                  </div>
+                </div>
+                <div className="text-right text-xs text-slate-400">
+                  <div>Координаты:</div>
+                  <div className="font-mono text-slate-200">
+                    {p.revealedLat ? `${p.revealedLat.toFixed(4)}, ${p.revealedLng.toFixed(4)}` : "Ожидание..."}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {activeTab === "chat" && (
+          <div className="flex flex-col h-full space-y-4">
+            <div className="flex space-x-2 bg-slate-800 p-1 rounded-xl">
               <button
-                onClick={() => setChatTab("all")}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
-                  chatTab === "all" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700"
+                onClick={() => setChatChannel("all")}
+                className={`flex-1 py-1.5 text-xs rounded-lg transition ${
+                  chatChannel === "all" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"
                 }`}
               >
-                Общий чат
+                Общий
               </button>
-
-              {!isSeeker ? (
-                <button
-                  onClick={() => setChatTab("runners")}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
-                    chatTab === "runners" ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  Чат убегающих 🔒
-                </button>
-              ) : null}
-            </div>
-
-            <div className="h-48 overflow-y-auto border rounded-xl p-3 flex flex-col gap-2 mb-3 bg-slate-50">
-              {filteredMessages.length === 0 ? (
-                <p className="text-xs text-slate-400">Сообщений пока нет</p>
-              ) : (
-                filteredMessages.map((msg) => (
-                  <div key={msg.id} className="text-sm">
-                    <span className="font-semibold text-slate-800">{msg.senderNickname}: </span>
-                    <span className="text-slate-700">{msg.text}</span>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <form onSubmit={sendMessage} className="flex gap-2">
-              <input
-                className="flex-1 rounded-lg border px-3 py-2 text-sm"
-                placeholder={
-                  chatTab === "runners"
-                    ? "Сообщение только для убегающих..."
-                    : "Сообщение для всех..."
-                }
-                value={chatText}
-                onChange={(e) => setChatText(e.target.value)}
-                maxLength={300}
-              />
               <button
-                disabled={sendingMsg || !chatText.trim()}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+                onClick={() => setChatChannel("runners")}
+                className={`flex-1 py-1.5 text-xs rounded-lg transition ${
+                  chatChannel === "runners" ? "bg-emerald-500 text-slate-950 font-bold" : "text-slate-400"
+                }`}
               >
+                Убегающие
+              </button>
+            </div>
+
+            <div className="flex-1 bg-slate-800 p-3 rounded-xl border border-slate-700 overflow-y-auto space-y-2 min-h-[300px]">
+              {session?.messages
+                .filter((m) => chatChannel === "all" || m.channel === chatChannel)
+                .map((m) => (
+                  <div key={m.id} className="bg-slate-700/50 p-2 rounded-lg text-sm">
+                    <span className="font-bold text-emerald-400">{m.senderNickname}: </span>
+                    <span>{m.text}</span>
+                  </div>
+                ))}
+            </div>
+
+            <form onSubmit={handleSendMessage} className="flex space-x-2">
+              <input
+                type="text"
+                placeholder="Сообщение..."
+                value={messageText}
+                onChange={(e) => setMessageText(e.target.value)}
+                className="flex-1 bg-slate-800 border border-slate-700 p-3 rounded-xl text-white focus:outline-none"
+              />
+              <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 px-4 py-3 rounded-xl font-semibold">
                 Отправить
               </button>
             </form>
           </div>
-        </section>
-      )}
+        )}
 
-      {error ? (
-        <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>
-      ) : null}
-    </main>
+        {activeTab === "settings" && (
+          <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 space-y-4">
+            <h2 className="text-lg font-semibold">Выбор роли</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => handleRoleChange("runner")}
+                className={`p-3 rounded-xl font-semibold border ${
+                  me?.role === "runner"
+                    ? "bg-emerald-500/20 border-emerald-400 text-emerald-300"
+                    : "bg-slate-700 border-slate-600 text-slate-300"
+                }`}
+              >
+                Убегающий
+              </button>
+              <button
+                onClick={() => handleRoleChange("hunter")}
+                className={`p-3 rounded-xl font-semibold border ${
+                  me?.role === "hunter"
+                    ? "bg-rose-500/20 border-rose-400 text-rose-300"
+                    : "bg-slate-700 border-slate-600 text-slate-300"
+                }`}
+              >
+                Охотник
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
