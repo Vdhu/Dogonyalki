@@ -1,39 +1,36 @@
-import { NextResponse } from "next/server";
-import { sessions } from "@/lib/store";
+import { fail, ok, safeJson } from "@/lib/api";
+import { upsertLocation } from "@/lib/tag-store";
 
-export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const sessionCode = id.toUpperCase();
-    const body = await req.json();
-    const { playerId, lat, lng } = body as { playerId: string; lat: number; lng: number };
+export const dynamic = "force-dynamic";
 
-    const session = sessions.get(sessionCode);
-    if (!session) {
-      return NextResponse.json({ error: "Комната не найдена" }, { status: 404 });
-    }
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
 
-    const player = session.players.find((p) => p.id === playerId);
-    if (!player) {
-      return NextResponse.json({ error: "Игрок не найден" }, { status: 404 });
-    }
-
-    const now = new Date().toISOString();
-    player.actualLat = lat;
-    player.actualLng = lng;
-    player.lastActualAt = now;
-
-    if (player.role === "seeker" || player.revealedLat === null) {
-      player.revealedLat = lat;
-      player.revealedLng = lng;
-      player.lastRevealedAt = now;
-    }
-
-    return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "Ошибка обновления геолокации" }, { status: 500 });
+  const parsed = await safeJson(req);
+  if (!parsed.ok) {
+    return fail("Некорректное тело запроса", 400);
   }
+
+  const body = parsed.data as {
+    playerId?: unknown;
+    lat?: unknown;
+    lng?: unknown;
+  };
+
+  const playerId = typeof body.playerId === "string" ? body.playerId : "";
+  const lat = typeof body.lat === "number" ? body.lat : Number(body.lat ?? Number.NaN);
+  const lng = typeof body.lng === "number" ? body.lng : Number(body.lng ?? Number.NaN);
+
+  const result = await upsertLocation({
+    sessionCode: id,
+    playerId,
+    lat,
+    lng,
+  });
+
+  if (!result.ok) {
+    return fail(result.reason.error, result.reason.status);
+  }
+
+  return ok({ ok: true });
 }

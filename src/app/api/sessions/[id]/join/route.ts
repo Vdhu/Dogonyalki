@@ -1,9 +1,11 @@
 import { fail, ok, safeJson } from "@/lib/api";
-import { createSession, validateRole } from "@/lib/tag-store";
+import { joinSession, validateRole } from "@/lib/tag-store";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+
   const parsed = await safeJson(req);
   if (!parsed.ok) {
     return fail("Некорректное тело запроса", 400);
@@ -12,18 +14,12 @@ export async function POST(req: Request) {
   const body = parsed.data as {
     nickname?: unknown;
     role?: unknown;
-    revealIntervalSeconds?: unknown;
   };
 
-  const revealIntervalSeconds =
-    typeof body.revealIntervalSeconds === "number"
-      ? body.revealIntervalSeconds
-      : Number(body.revealIntervalSeconds ?? Number.NaN);
-
-  const result = await createSession({
+  const result = await joinSession({
+    sessionCode: id,
     nickname: typeof body.nickname === "string" ? body.nickname : "",
     role: validateRole(body.role),
-    revealIntervalSeconds,
   });
 
   if (!result.ok) {

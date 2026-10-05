@@ -1,7 +1,5 @@
-import TagGameApp from "@/components/tag-game-app";
-
-export const dynamic = "force-dynamic";
+import { TagGameClient } from "@/components/tag-game-client";
 
 export default function HomePage() {
-  return <TagGameApp />;
+  return <TagGameClient />;
 }
